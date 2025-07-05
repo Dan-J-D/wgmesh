@@ -1,4 +1,4 @@
-# 🔗 WireGuard-P2P Mesh
+# 🔗 wgmesh
 > Secure, peer-to-peer, decentralized mesh networking using WireGuard and libp2p.
 
 ## ✨ Overview
