@@ -1,4 +1,4 @@
-module github.com/dan-j-d/wireguard-p2p
+module github.com/dan-j-d/wgmesh
 
 go 1.23.8
 
