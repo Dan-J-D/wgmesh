@@ -42,11 +42,12 @@ To connect to another peer:
 3. The nodes will automatically establish secure connections and form a mesh.
 
 ## 💻 CLI Commands
-| Command         | Description                               |
-|-----------------|-------------------------------------------|
-| /connect <json> | Connects to a peer using its multiaddr(s) |
-| /peers          | Lists currently connected libp2p peers    |
-| /exit           | Gracefully shuts down the node            |
+| Command         | Description                                 |
+|-----------------|---------------------------------------------|
+| /connect        | Connects to a peer using its multiaddr(s)   |
+| /connect-string | Outputs connection JSON strings for sharing |
+| /peers          | Lists currently connected libp2p peers      |
+| /exit           | Gracefully shuts down the node              |
 
 ## 📁 Data & Configs
 All persistent state (keys, WireGuard configs, DHT store) are stored under the specified --data-path. On startup, the tool will reuse previous identities and settings if present.
