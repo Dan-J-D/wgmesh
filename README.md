@@ -2,7 +2,7 @@
 > Secure, peer-to-peer, decentralized mesh networking using WireGuard and libp2p.
 
 ## ✨ Overview
-**WireGuard-P2P** is a lightweight tool that transforms a collection of nodes into a **distributed, encrypted, and decentralized mesh network.** It combines [WireGuard](https://www.wireguard.com/)'s fast, secure VPN tunneling with [libp2p](https://libp2p.io/)'s powerful peer-to-peer networking to form a resilient overlay mesh — no central server required.
+**Wgmesh** is a lightweight tool that transforms a collection of nodes into a **distributed, encrypted, and decentralized mesh network.** It combines [WireGuard](https://www.wireguard.com/)'s fast, secure VPN tunneling with [libp2p](https://libp2p.io/)'s powerful peer-to-peer networking to form a resilient overlay mesh — no central server required.
 
 Perfect for:
 - 🌍 Distributed VPN mesh networks
@@ -16,9 +16,9 @@ https://golang.org/dl/
 
 ### 2. Clone and Build
 ```bash
-git clone https://github.com/dan-j-d/wireguard-p2p.git
-cd wireguard-p2p
-go build -o wgmesh
+git clone https://github.com/dan-j-d/wgmesh.git
+cd wgmesh
+go build
 ```
 
 ### 3. Run It
