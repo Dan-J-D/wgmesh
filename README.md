@@ -50,15 +50,16 @@ To connect to another peer:
 | /exit           | Gracefully shuts down the node              |
 
 ## 📁 Data & Configs
-All persistent state (keys, WireGuard configs, DHT store) are stored under the specified --data-path. On startup, the tool will reuse previous identities and settings if present.
+All persistent state (keys, WireGuard configs, DHT store) are stored under the specified `--data-path`. On startup, the tool will reuse previous identities and settings if present.
 
 ## 🔐 Security
-- Uses WireGuard’s modern encryption for tunnel traffic.
-- Peer communication secured via libp2p’s TLS and optional shared secrets.
+- Uses **WireGuard’s modern encryption** for tunnel traffic.
+- Peer communication secured via **libp2p’s TLS and optional shared secrets.**
 - Can run on public internet or in private networks.
+- Optionally supports a shared secret (`--pre-shared-key`) to restrict network access.
 
 ## 🧪 Example Use Case: Private VPN Mesh
-Run this on multiple VPS instances, assign each a unique --wireguard-ip, and they will:
+Run this on multiple VPS instances, assign each a unique `--wireguard-ip`, and they will:
 - Discover each other
 - Exchange encrypted configs
 - Form a decentralized VPN mesh with no central coordinator
