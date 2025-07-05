@@ -7,41 +7,47 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"path"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/ipfs/go-log/v2"
 	"github.com/libp2p/go-libp2p/core/peer"
 	ma "github.com/multiformats/go-multiaddr"
 	"gopkg.in/yaml.v3"
 )
 
 var (
-	port               = flag.Int("port", 37950, "Port to listen on for libp2p connections (default: 37950)")
+	port               = flag.Int("port", 37950, "Port to listen on for libp2p connections")
 	dataPath           = flag.String("data-path", "data", "Path to store data (e.g., datastore, DHT records, config, etc.)")
 	publicIp           = flag.String("public-ip", "", "Public IP address for WireGuard interface (required)")
-	wireguardIp        = flag.String("wireguard-ip", "10.0.0.1", "IP address for WireGuard interface (default: 10.0.0.1)")
-	wireguardPort      = flag.Int("wireguard-port", 51820, "WireGuard port to listen on (default: 51820)")
-	wireguardInterface = flag.String("wireguard-interface", "wg0", "WireGuard interface name (default: wg0)")
+	wireguardIp        = flag.String("wireguard-ip", "10.0.0.1", "IP address for WireGuard interface")
+	wireguardPort      = flag.Int("wireguard-port", 51820, "WireGuard port to listen on")
+	wireguardInterface = flag.String("wireguard-interface", "wg0", "WireGuard interface name")
 	preSharedKey       = flag.String("pre-shared-key", "", "Pre-shared key for private network (optional)")
 
-	// publicIpAddress net.IP
-
-	// wgPeers      = make(map[string]wgPeer)
-	// wgPeersMutex = &sync.RWMutex{}
+	debug = flag.Bool("debug", false, "Enable debug logging ")
 )
 
 func main() {
 	flag.Parse()
 
-	err := os.MkdirAll(*dataPath, 0755)
-	if err != nil {
-		panic(fmt.Sprintf("Failed to create data path %s: %v", *dataPath, err))
+	if *debug {
+		log.SetDebugLogging()
 	}
 
+	dataPathAbs, err := filepath.Abs(*dataPath)
+	if err != nil {
+		panic(fmt.Sprintf("Failed to get absolute path for data path %s: %v", *dataPath, err))
+	}
+
+	err = os.MkdirAll(dataPathAbs, 0755)
+	if err != nil {
+		panic(fmt.Sprintf("Failed to create data path %s: %v", dataPathAbs, err))
+	}
 	var config Config
-	if info, err := os.Stat(path.Join(*dataPath, "config.yaml")); err == nil && !info.IsDir() {
-		data, err := os.ReadFile(path.Join(*dataPath, "config.yaml"))
+	if info, err := os.Stat(filepath.Join(dataPathAbs, "config.yaml")); err == nil && !info.IsDir() {
+		data, err := os.ReadFile(filepath.Join(dataPathAbs, "config.yaml"))
 		if err != nil {
 			panic(fmt.Sprintf("Failed to read config file: %v", err))
 		}
@@ -49,10 +55,11 @@ func main() {
 		if err := yaml.Unmarshal(data, &config); err != nil {
 			panic(fmt.Sprintf("Failed to unmarshal config file: %v", err))
 		}
+
+		config.DataPath = dataPathAbs
 	} else {
 		config = Config{
-			DhtDataPath:   path.Join(*dataPath, "dht"),
-			PeerstorePath: path.Join(*dataPath, "peerstore"),
+			DataPath: dataPathAbs,
 
 			PublicIp:           *publicIp,
 			Port:               *port,
@@ -79,7 +86,7 @@ func main() {
 			panic(fmt.Sprintf("Failed to marshal config: %v", err))
 		}
 
-		if err := os.WriteFile(path.Join(*dataPath, "config.yaml"), configData, 0644); err != nil {
+		if err := os.WriteFile(filepath.Join(dataPathAbs, "config.yaml"), configData, 0644); err != nil {
 			panic(fmt.Sprintf("Failed to write config file: %v", err))
 		}
 	}
@@ -90,7 +97,10 @@ func main() {
 	}
 	fmt.Println("Connect Addrs: ", string(connectStr))
 
-	wg.Start()
+	err = wg.Start()
+	if err != nil {
+		panic(fmt.Sprintf("Failed to start WireGuard P2P instance: %v", err))
+	}
 
 	for {
 		scanner := bufio.NewScanner(os.Stdin)
@@ -148,15 +158,14 @@ func main() {
 						}
 					}
 
-					c, ca := context.WithTimeout(context.Background(), 10*time.Second)
-					if err := wg.GetHost().Connect(c, connectAddrs); err != nil {
-						ca()
+					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+					if err := wg.GetHost().Connect(ctx, connectAddrs); err != nil {
+						cancel()
 						fmt.Printf("Error connecting to peer: %v\n", err)
 						continue
 					}
-					ca()
+					cancel()
 
-					// h.Peerstore().SetAddrs(connectAddrs.ID, connectAddrs.Addrs, time)
 					fmt.Printf("Connected to peer: %s\n", connectAddrs.ID)
 				case "peers":
 					peers := wg.GetHost().Network().Peers()
@@ -181,11 +190,6 @@ func main() {
 					}
 
 					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-					if err != nil {
-						fmt.Printf("Error creating context: %v\n", err)
-						continue
-					}
-
 					addrInfo, err := wg.GetDHT().FindPeer(ctx, peerID)
 					cancel()
 					if err != nil {

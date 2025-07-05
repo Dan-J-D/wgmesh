@@ -2,12 +2,12 @@ package main
 
 import (
 	"context"
-	crand "crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
 	"net"
-	"runtime"
+	"path"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -25,22 +25,47 @@ import (
 	"github.com/libp2p/go-libp2p/p2p/muxer/yamux"
 	libp2ptls "github.com/libp2p/go-libp2p/p2p/security/tls"
 	ma "github.com/multiformats/go-multiaddr"
-	"github.com/vishvananda/netlink"
-	"golang.zx2c4.com/wireguard/wgctrl"
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 )
 
 const PeerUpdateTopic = "peers"
 
-type wgPeer struct {
-	PublicIp    net.IP
-	InterfaceIP net.IP
-	PublicKey   string
+type wireguardPeerConfig struct {
+	PublicKey    string
+	InterfaceIP  net.IP
+	EndpointIP   net.IP
+	EndpointPort uint16
+	PreSharedKey string
+}
+
+type wireguardConfig struct {
+	Interface  string
+	PrivateKey string
+	Address    net.IP
+	ListenPort uint16
+	Peers      map[string]wireguardPeerConfig
+}
+
+func (wc *wireguardConfig) String() string {
+	str := "[Interface]\n"
+	str += "PrivateKey = " + wc.PrivateKey + "\n"
+	str += "Address = " + wc.Address.String() + "/32\n"
+	str += "ListenPort = " + fmt.Sprintf("%d\n", wc.ListenPort)
+	str += "\n"
+
+	for _, peer := range wc.Peers {
+		str += "[Peer]\n"
+		str += "PublicKey = " + peer.PublicKey + "\n"
+		str += "Endpoint = " + peer.EndpointIP.String() + ":" + strconv.FormatUint(uint64(peer.EndpointPort), 10) + "\n"
+		str += "AllowedIPs = " + peer.InterfaceIP.String() + "/32\n"
+		str += "PresharedKey = " + peer.PreSharedKey + "\n"
+		str += "\n"
+	}
+	return str
 }
 
 type Config struct {
-	DhtDataPath   string `validate:"required"`
-	PeerstorePath string `validate:"required"`
+	DataPath string `validate:"required"`
 
 	PublicIp           string `validate:"required,ip"`
 	Port               int    `validate:"required,min=1,max=65535"`
@@ -64,11 +89,10 @@ type WireguardP2P struct {
 	peersTopic     *pubsub.Topic
 	peerSub        *pubsub.Subscription
 
-	wgPsk        wgtypes.Key
-	wgClient     *wgctrl.Client
-	wgPeers      map[string]wgPeer
-	wgPeersMutex sync.RWMutex
-	wgPrivateKey wgtypes.Key
+	wgPsk         wgtypes.Key
+	wgConfig      wireguardConfig
+	wgConfigMutex sync.RWMutex
+	wgPrivateKey  wgtypes.Key
 
 	backgroundCtx    context.Context
 	backgroundCancel context.CancelFunc
@@ -86,7 +110,6 @@ func NewWireguardP2P(config Config) (*WireguardP2P, error) {
 
 	wg := new(WireguardP2P)
 	wg.config = config
-	wg.wgPeers = make(map[string]wgPeer)
 
 	wg.publicIpAddress = net.ParseIP(config.PublicIp)
 	if wg.publicIpAddress == nil {
@@ -108,7 +131,7 @@ func NewWireguardP2P(config Config) (*WireguardP2P, error) {
 	}
 
 	if len(config.PeerIdentityPrivateKey) == 0 {
-		wg.peerPrivateKey, _, err = crypto.GenerateKeyPairWithReader(crypto.Ed25519, -1, crand.Reader)
+		wg.peerPrivateKey, _, err = crypto.GenerateKeyPair(crypto.Ed25519, 0)
 		if err != nil {
 			return nil, fmt.Errorf("failed to generate peer identity private key: %w", err)
 		}
@@ -133,9 +156,13 @@ func NewWireguardP2P(config Config) (*WireguardP2P, error) {
 
 	psk := sha256.New()
 	_, err = psk.Write([]byte(wg.config.PreSharedKey))
+	if err != nil {
+		wg.backgroundCancel()
+		return nil, fmt.Errorf("failed to write pre-shared key: %w", err)
+	}
 	psk.Write([]byte{0x5d, 0xa5, 0x86, 0xed, 0xc7, 0x30, 0x5a, 0xb7, 0x2c, 0x0d, 0x4c, 0x3d, 0xff, 0x67, 0x51, 0xe5}) // Random pre-shared salt (generated from `openssl rand -hex 16`)
 
-	peerStoreDb, err := leveldb.NewDatastore(wg.config.PeerstorePath, nil)
+	peerStoreDb, err := leveldb.NewDatastore(path.Join(wg.config.DataPath, "peerstore"), nil)
 	if err != nil {
 		wg.backgroundCancel()
 		return nil, fmt.Errorf("failed to create peerstore datastore: %w", err)
@@ -154,7 +181,7 @@ func NewWireguardP2P(config Config) (*WireguardP2P, error) {
 		libp2p.EnableAutoNATv2(),
 		libp2p.EnableHolePunching(),
 		libp2p.EnableRelay(),
-		libp2p.PrivateNetwork(pnet.PSK(psk.Sum(nil))),
+		libp2p.PrivateNetwork(pnet.PSK(psk.Sum(pnet.PSK{}))),
 		libp2p.Security(libp2ptls.ID, libp2ptls.New),
 		libp2p.Muxer(yamux.ID, yamux.DefaultTransport),
 		libp2p.Peerstore(peerStore),
@@ -174,7 +201,7 @@ func NewWireguardP2P(config Config) (*WireguardP2P, error) {
 		return nil, fmt.Errorf("failed to create WireGuard pre-shared key: %w", err)
 	}
 
-	dhtDataStore, err := leveldb.NewDatastore(wg.config.DhtDataPath, nil)
+	dhtDataStore, err := leveldb.NewDatastore(path.Join(wg.config.DataPath, "dht"), nil)
 	if err != nil {
 		wg.backgroundCancel()
 		wg.host.Close()
@@ -216,14 +243,21 @@ func NewWireguardP2P(config Config) (*WireguardP2P, error) {
 		return nil, fmt.Errorf("failed to subscribe to PubSub topic %s: %w", PeerUpdateTopic, err)
 	}
 
-	wg.wgClient, err = wgctrl.New()
+	wg.wgConfig = wireguardConfig{
+		Interface:  wg.config.WireguardInterface,
+		PrivateKey: wg.config.WireguardPrivateKey,
+		Address:    net.ParseIP(wg.config.WireguardIp),
+		ListenPort: uint16(wg.config.WireguardPort),
+		Peers:      make(map[string]wireguardPeerConfig, 0),
+	}
+
+	err = writeWireGuardInterface(wg.config.DataPath, wg.wgConfig)
 	if err != nil {
 		wg.backgroundCancel()
 		wg.peersTopic.Close()
-		wg.peerSub.Cancel()
 		wg.dht.Close()
 		wg.host.Close()
-		return nil, fmt.Errorf("failed to create WireGuard client: %w", err)
+		return nil, fmt.Errorf("failed to write WireGuard interface config: %w", err)
 	}
 
 	return wg, nil
@@ -284,34 +318,20 @@ func (wg *WireguardP2P) GetAddrs() []string {
 }
 
 func (wg *WireguardP2P) Start() error {
-	wgLink := &netlink.GenericLink{
-		LinkAttrs: netlink.LinkAttrs{Name: wg.config.WireguardInterface},
-		LinkType:  "wireguard",
-	}
-
-	if runtime.GOOS == "linux" {
-		if err := netlink.LinkAdd(wgLink); err != nil {
-			panic(fmt.Sprintf("Failed to create WireGuard interface: %v", err))
-		}
-
-		if err := netlink.AddrAdd(wgLink, &netlink.Addr{
-			IPNet: &net.IPNet{
-				IP:   net.ParseIP(wg.config.WireguardIp),
-				Mask: net.CIDRMask(32, 32),
-			},
-		}); err != nil {
-			panic(fmt.Sprintf("Failed to add IP address to WireGuard interface: %v", err))
-		}
-
-		if err := netlink.LinkSetUp(wgLink); err != nil {
-			panic(fmt.Sprintf("Failed to bring up WireGuard interface: %v", err))
-		}
+	err := installWireguardInterface(wg.config.WireguardInterface, wg.config.DataPath)
+	if err != nil {
+		return fmt.Errorf("failed to install WireGuard interface: %w", err)
 	}
 
 	// Kad-DHT Bootstrap
 	go func() {
 		if err := wg.dht.Bootstrap(wg.backgroundCtx); err != nil {
-			panic(err)
+			if err == context.Canceled {
+				return // Context canceled, exit gracefully
+			}
+
+			fmt.Printf("Error bootstrapping DHT: %v\n", err)
+			return
 		}
 	}()
 
@@ -343,9 +363,21 @@ func (wg *WireguardP2P) Start() error {
 				continue
 			}
 
-			peerPublicIp := net.ParseIP(wgPeerData[0])
-			if peerPublicIp == nil {
+			udpAddr := strings.Split(wgPeerData[0], ":")
+			if len(udpAddr) != 2 {
+				fmt.Printf("Invalid WireGuard peer endpoint format: %s\n", wgPeerData[0])
+				continue
+			}
+
+			peerEndpointIP := net.ParseIP(udpAddr[0])
+			if peerEndpointIP == nil {
 				fmt.Printf("Invalid IP address: %s\n", wgPeerData[0])
+				continue
+			}
+
+			peerEndpointPort, err := strconv.Atoi(udpAddr[1])
+			if err != nil || peerEndpointPort <= 0 || peerEndpointPort > 65535 {
+				fmt.Printf("Invalid port number: %s\n", udpAddr[1])
 				continue
 			}
 
@@ -355,71 +387,33 @@ func (wg *WireguardP2P) Start() error {
 				continue
 			}
 
-			wg.wgPeersMutex.Lock()
-			if peer, ok := wg.wgPeers[msg.GetFrom().String()]; ok {
-				if peer.PublicIp.Equal(peerPublicIp) && peer.InterfaceIP.Equal(peerInterfaceIp) && peer.PublicKey == wgPeerData[2] {
-					wg.wgPeersMutex.Unlock()
+			wg.wgConfigMutex.Lock()
+			if peer, ok := wg.wgConfig.Peers[msg.GetFrom().String()]; ok {
+				if peer.EndpointIP.Equal(peerEndpointIP) && peer.EndpointPort == uint16(peerEndpointPort) && peer.InterfaceIP.Equal(peerInterfaceIp) && peer.PublicKey == wgPeerData[2] {
+					wg.wgConfigMutex.Unlock()
 					continue
 				}
 			}
 
-			wg.wgPeers[msg.GetFrom().String()] = wgPeer{
-				PublicIp:    peerPublicIp,
-				InterfaceIP: peerInterfaceIp,
-				PublicKey:   wgPeerData[2],
+			wg.wgConfig.Peers[msg.GetFrom().String()] = wireguardPeerConfig{
+				EndpointIP:   peerEndpointIP,
+				EndpointPort: uint16(peerEndpointPort),
+				InterfaceIP:  peerInterfaceIp,
+				PublicKey:    wgPeerData[2],
+				PreSharedKey: wg.wgPsk.String(),
 			}
 
-			wg.wgPeersMutex.Unlock()
+			wg.wgConfigMutex.Unlock()
 
-			wg.wgPeersMutex.RLock()
-			peers := make([]wgtypes.PeerConfig, 0, len(wg.wgPeers))
-			for _, peer := range wg.wgPeers {
-				peerPublicKey, err := wgtypes.ParseKey(wgPeerData[2])
-				if err != nil {
-					fmt.Printf("Invalid public key: %v\n", err)
-					continue
-				}
-
-				peers = append(peers, wgtypes.PeerConfig{
-					PublicKey: peerPublicKey,
-					AllowedIPs: []net.IPNet{
-						{
-							IP:   peer.InterfaceIP,
-							Mask: net.CIDRMask(32, 32),
-						},
-					},
-					Endpoint: &net.UDPAddr{
-						IP:   peer.PublicIp,
-						Port: wg.config.WireguardPort,
-					},
-					PresharedKey: &wg.wgPsk,
-				})
-
-				if runtime.GOOS == "linux" {
-					err = netlink.RouteAdd(&netlink.Route{
-						Dst: &net.IPNet{
-							IP:   peer.InterfaceIP,
-							Mask: net.CIDRMask(32, 32),
-						},
-						LinkIndex: wgLink.Attrs().Index,
-						Scope:     netlink.SCOPE_LINK,
-					})
-					if err != nil {
-						fmt.Printf("Error adding route for WireGuard peer: %v\n", err)
-						continue
-					}
-				}
-			}
-			wg.wgPeersMutex.RUnlock()
-
-			err = wg.wgClient.ConfigureDevice(wg.config.WireguardInterface, wgtypes.Config{
-				PrivateKey:   &wg.wgPrivateKey,
-				ListenPort:   wireguardPort,
-				ReplacePeers: true,
-				Peers:        peers,
-			})
+			err = writeWireGuardInterface(wg.config.DataPath, wg.wgConfig)
 			if err != nil {
-				fmt.Printf("Error configuring WireGuard device: %v\n", err)
+				fmt.Printf("Failed to write WireGuard interface config: %v\n", err)
+				continue
+			}
+
+			err = syncWireguardInterface(wg.config.WireguardInterface, wg.config.DataPath)
+			if err != nil {
+				fmt.Printf("Failed to sync WireGuard interface: %v\n", err)
 				continue
 			}
 		}
@@ -435,18 +429,30 @@ func (wg *WireguardP2P) Start() error {
 					}
 
 					addrInfo := wg.host.Peerstore().PeerInfo(peer)
-					c, ca := context.WithTimeout(wg.backgroundCtx, 3*time.Second)
-					if err := wg.host.Connect(c, addrInfo); err != nil {
-						ca()
+					ctx, cancel := context.WithTimeout(wg.backgroundCtx, 3*time.Second)
+					err := wg.host.Connect(ctx, addrInfo)
+					cancel()
+					if err != nil {
+						if err == context.Canceled {
+							return // Context canceled, exit gracefully
+						}
+
 						fmt.Printf("Error connecting to peer %s: %v\n", peer, err)
 						continue
 					}
-					ca()
+
+					fmt.Printf("Connected to peer: %s\n", peer)
 					break
 				}
 			}
 
-			wg.peersTopic.Publish(wg.backgroundCtx, []byte(string(wg.publicIpAddress.String())+"@"+wg.config.WireguardIp+"@"+wg.wgPrivateKey.PublicKey().String()))
+			err := wg.peersTopic.Publish(wg.backgroundCtx, []byte(string(wg.publicIpAddress.String())+":"+strconv.FormatUint(uint64(wg.config.WireguardPort), 10)+"@"+wg.config.WireguardIp+"@"+wg.wgPrivateKey.PublicKey().String()))
+			if err != nil {
+				if err == context.Canceled {
+					return // Context canceled, exit gracefully
+				}
+				continue
+			}
 
 			time.Sleep(1 * time.Minute)
 		}
@@ -469,19 +475,14 @@ func (wg *WireguardP2P) Close() error {
 		return fmt.Errorf("failed to close host: %w", err)
 	}
 
-	if runtime.GOOS == "linux" {
-		wgLink, err := netlink.LinkByName(wg.config.WireguardInterface)
-		if err != nil {
-			return fmt.Errorf("failed to get WireGuard interface: %w", err)
-		}
-
-		if err := netlink.LinkDel(wgLink); err != nil {
-			return fmt.Errorf("failed to delete WireGuard interface: %w", err)
-		}
+	err := uninstallWireguardInterface(wg.config.WireguardInterface)
+	if err != nil {
+		return fmt.Errorf("failed to uninstall wireguard interface: %v", err)
 	}
 
-	if err := wg.wgClient.Close(); err != nil {
-		return fmt.Errorf("failed to close WireGuard client: %w", err)
+	err = deleteWireGuardInterface(wg.config.WireguardInterface, wg.config.DataPath)
+	if err != nil {
+		return fmt.Errorf("failed to delete wireguard config file: %v", err)
 	}
 
 	return nil
