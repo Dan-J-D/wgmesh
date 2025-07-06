@@ -234,7 +234,7 @@ func main() {
 						fmt.Printf("Failed to marshal connect string: %v\n", err)
 						continue
 					}
-					fmt.Println("Connect Addrs: ", string(connectStr))
+					fmt.Println("Connect Addrs:", string(connectStr))
 				case "connect":
 					if len(inputSplit) < 2 {
 						fmt.Println("Usage: /connect <connect-string>")
