@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,6 +28,7 @@ import (
 
 	"github.com/ipfs/go-log/v2"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/core/peerstore"
 	ma "github.com/multiformats/go-multiaddr"
 	"gopkg.in/yaml.v3"
 )
@@ -40,33 +42,128 @@ var (
 	wireguardInterface = flag.String("wireguard-interface", "wg0", "WireGuard interface name")
 	preSharedKey       = flag.String("pre-shared-key", "", "Pre-shared key for private network (optional)")
 
-	debug = flag.Bool("debug", false, "Enable debug logging ")
+	logLevel  = flag.String("log-level", "info", "Log level (debug, info, warn, error)")
+	logFile   = flag.String("log-file", "", "Log file path (optional)")
+	logStdout = flag.Bool("log-stdout", true, "Enable logging to stdout")
+
+	debugLibp2p = flag.Bool("debug-libp2p", false, "Enable debug logging for libp2p")
 )
+
+type multiHandler struct {
+	handlers []slog.Handler
+}
+
+func (m *multiHandler) Enabled(ctx context.Context, level slog.Level) bool {
+	for _, h := range m.handlers {
+		if h.Enabled(ctx, level) {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *multiHandler) Handle(ctx context.Context, r slog.Record) error {
+	var err error
+	for _, h := range m.handlers {
+		if h.Enabled(ctx, r.Level) {
+			e := h.Handle(ctx, r)
+			if e != nil && err == nil {
+				err = e
+			}
+		}
+	}
+	return err
+}
+
+func (m *multiHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	newHandlers := make([]slog.Handler, len(m.handlers))
+	for i, h := range m.handlers {
+		newHandlers[i] = h.WithAttrs(attrs)
+	}
+	return &multiHandler{handlers: newHandlers}
+}
+
+func (m *multiHandler) WithGroup(name string) slog.Handler {
+	newHandlers := make([]slog.Handler, len(m.handlers))
+	for i, h := range m.handlers {
+		newHandlers[i] = h.WithGroup(name)
+	}
+	return &multiHandler{handlers: newHandlers}
+}
 
 func main() {
 	flag.Parse()
 
-	if *debug {
+	if *debugLibp2p {
 		log.SetDebugLogging()
+	}
+
+	if *logLevel != "" {
+		// setup slog logger
+		var lvl slog.Level
+		switch *logLevel {
+		case "debug":
+			lvl = slog.LevelDebug
+		case "info":
+			lvl = slog.LevelInfo
+		case "warn":
+			lvl = slog.LevelWarn
+		case "error":
+			lvl = slog.LevelError
+		default:
+			panic(fmt.Sprintf("Invalid log level: %s", *logLevel))
+		}
+
+		var handlers []slog.Handler
+		if *logFile != "" {
+			file, err := os.OpenFile(*logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+			if err != nil {
+				panic(fmt.Sprintf("Failed to open log file %s: %v", *logFile, err))
+			}
+			defer file.Close()
+
+			fileHandler := slog.NewJSONHandler(file, &slog.HandlerOptions{
+				Level: lvl,
+			})
+			if err != nil {
+				panic(fmt.Sprintf("Failed to create file logger: %v", err))
+			}
+			handlers = append(handlers, fileHandler)
+		}
+
+		if *logStdout {
+			stdoutHandler := slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+				Level: lvl,
+			})
+			handlers = append(handlers, stdoutHandler)
+		}
+
+		if len(handlers) > 0 {
+			slog.SetDefault(slog.New(&multiHandler{handlers: handlers}))
+		}
 	}
 
 	dataPathAbs, err := filepath.Abs(*dataPath)
 	if err != nil {
+		slog.Error("Failed to get absolute path for data path", "dataPath", *dataPath, "error", err)
 		panic(fmt.Sprintf("Failed to get absolute path for data path %s: %v", *dataPath, err))
 	}
 
 	err = os.MkdirAll(dataPathAbs, 0755)
 	if err != nil {
+		slog.Error("Failed to create data path", "dataPath", dataPathAbs, "error", err)
 		panic(fmt.Sprintf("Failed to create data path %s: %v", dataPathAbs, err))
 	}
 	var config Config
 	if info, err := os.Stat(filepath.Join(dataPathAbs, "config.yaml")); err == nil && !info.IsDir() {
 		data, err := os.ReadFile(filepath.Join(dataPathAbs, "config.yaml"))
 		if err != nil {
+			slog.Error("Failed to read config file", "file", filepath.Join(dataPathAbs, "config.yaml"), "error", err)
 			panic(fmt.Sprintf("Failed to read config file: %v", err))
 		}
 
 		if err := yaml.Unmarshal(data, &config); err != nil {
+			slog.Error("Failed to unmarshal config file", "file", filepath.Join(dataPathAbs, "config.yaml"), "error", err)
 			panic(fmt.Sprintf("Failed to unmarshal config file: %v", err))
 		}
 
@@ -89,6 +186,7 @@ func main() {
 
 	wg, err := NewWireguardP2P(config)
 	if err != nil {
+		slog.Error("Failed to create WireGuard P2P instance", "error", err)
 		panic(fmt.Sprintf("Failed to create WireGuard P2P instance: %v", err))
 	}
 	defer wg.Close()
@@ -97,16 +195,19 @@ func main() {
 		config := wg.GetConfig()
 		configData, err := yaml.Marshal(config)
 		if err != nil {
+			slog.Error("Failed to marshal config", "error", err)
 			panic(fmt.Sprintf("Failed to marshal config: %v", err))
 		}
 
 		if err := os.WriteFile(filepath.Join(dataPathAbs, "config.yaml"), configData, 0644); err != nil {
+			slog.Error("Failed to write config file", "file", filepath.Join(dataPathAbs, "config.yaml"), "error", err)
 			panic(fmt.Sprintf("Failed to write config file: %v", err))
 		}
 	}
 
 	err = wg.Start()
 	if err != nil {
+		slog.Error("Failed to start WireGuard P2P instance", "error", err)
 		panic(fmt.Sprintf("Failed to start WireGuard P2P instance: %v", err))
 	}
 
@@ -130,7 +231,8 @@ func main() {
 				case "connect-string":
 					connectStr, err := json.Marshal(wg.GetAddrs())
 					if err != nil {
-						panic(fmt.Sprintf("Failed to marshal connect string: %v", err))
+						fmt.Println("Failed to marshal connect string: %v", err)
+						continue
 					}
 					fmt.Println("Connect Addrs: ", string(connectStr))
 				case "connect":
@@ -180,8 +282,8 @@ func main() {
 					}
 					cancel()
 
-					wg.GetHost().Peerstore().AddAddrs(connectAddrs.ID, connectAddrs.Addrs, time.Hour*24*31) // Store for 31 days
-					fmt.Printf("Connected to peer: %s\n", connectAddrs.ID)
+					wg.GetHost().Peerstore().AddAddrs(connectAddrs.ID, connectAddrs.Addrs, peerstore.PermanentAddrTTL)
+					slog.Info("Connected to peer", "peerID", connectAddrs.ID, "addrs", connectAddrs.Addrs)
 				case "peers":
 					peers := wg.GetHost().Network().Peers()
 					if len(peers) == 0 {
@@ -193,7 +295,7 @@ func main() {
 						}
 					}
 				case "exit":
-					fmt.Println("Exiting...")
+					slog.Info("Exiting...")
 					return
 				default:
 					fmt.Printf("Unknown command: `%s`\n", inputSplit[0])
@@ -204,7 +306,7 @@ func main() {
 		}
 
 		if err := scanner.Err(); err != nil {
-			fmt.Printf("Error reading input: %v\n", err)
+			slog.Error("Error reading input", "error", err)
 		}
 	}
 }
