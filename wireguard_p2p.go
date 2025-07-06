@@ -143,6 +143,9 @@ type WireguardP2P struct {
 	config          Config
 	publicIpAddress net.IP
 
+	upnp                 *upnp
+	upnpWireguardPortIdx uint32
+
 	peerPrivateKey crypto.PrivKey
 	host           host.Host
 	dht            *dht.IpfsDHT
@@ -226,23 +229,23 @@ func NewWireguardP2P(config Config) (*WireguardP2P, error) {
 	psk := sha256.New()
 	_, err = psk.Write([]byte(wg.config.PreSharedKey))
 	if err != nil {
-		wg.backgroundCancel()
 		slog.Error("Failed to write pre-shared key", "error", err)
+		wg.backgroundCancel()
 		return nil, fmt.Errorf("failed to write pre-shared key: %w", err)
 	}
 	psk.Write([]byte{0x5d, 0xa5, 0x86, 0xed, 0xc7, 0x30, 0x5a, 0xb7, 0x2c, 0x0d, 0x4c, 0x3d, 0xff, 0x67, 0x51, 0xe5}) // Random pre-shared salt (generated from `openssl rand -hex 16`)
 
 	peerStoreDb, err := leveldb.NewDatastore(path.Join(wg.config.DataPath, "peerstore"), nil)
 	if err != nil {
-		wg.backgroundCancel()
 		slog.Error("Failed to create peerstore datastore", "error", err)
+		wg.backgroundCancel()
 		return nil, fmt.Errorf("failed to create peerstore datastore: %w", err)
 	}
 
 	peerStore, err := pstoreds.NewPeerstore(wg.backgroundCtx, peerStoreDb, pstoreds.DefaultOpts())
 	if err != nil {
-		wg.backgroundCancel()
 		peerStoreDb.Close()
+		wg.backgroundCancel()
 		slog.Error("Failed to create peerstore", "error", err)
 		return nil, fmt.Errorf("failed to create peerstore: %w", err)
 	}
@@ -259,8 +262,8 @@ func NewWireguardP2P(config Config) (*WireguardP2P, error) {
 		libp2p.Peerstore(peerStore),
 		libp2p.ListenAddrStrings(fmt.Sprintf("/ip4/0.0.0.0/tcp/%d", wg.config.Port), fmt.Sprintf("/ip6/::/tcp/%d", wg.config.Port)))
 	if err != nil {
-		wg.backgroundCancel()
 		peerStore.Close()
+		wg.backgroundCancel()
 		slog.Error("Failed to create libp2p host", "error", err)
 		return nil, fmt.Errorf("failed to create libp2p host: %w", err)
 	}
@@ -271,16 +274,16 @@ func NewWireguardP2P(config Config) (*WireguardP2P, error) {
 	psk.Write([]byte("wireguard_p2p"))
 	wg.wgPsk, err = wgtypes.NewKey(psk.Sum(nil))
 	if err != nil {
-		wg.backgroundCancel()
 		wg.host.Close()
+		wg.backgroundCancel()
 		slog.Error("Failed to create WireGuard pre-shared key", "error", err)
 		return nil, fmt.Errorf("failed to create WireGuard pre-shared key: %w", err)
 	}
 
 	dhtDataStore, err := leveldb.NewDatastore(path.Join(wg.config.DataPath, "dht"), nil)
 	if err != nil {
-		wg.backgroundCancel()
 		wg.host.Close()
+		wg.backgroundCancel()
 		slog.Error("Failed to create DHT datastore", "error", err)
 		return nil, fmt.Errorf("failed to create DHT datastore: %w", err)
 	}
@@ -289,9 +292,9 @@ func NewWireguardP2P(config Config) (*WireguardP2P, error) {
 		dht.Datastore(dhtDataStore),
 		dht.ProtocolPrefix("/dht"))
 	if err != nil {
-		wg.backgroundCancel()
 		wg.host.Close()
 		dhtDataStore.Close()
+		wg.backgroundCancel()
 		slog.Error("Failed to create DHT", "error", err)
 		return nil, fmt.Errorf("failed to create DHT: %w", err)
 	}
@@ -299,9 +302,9 @@ func NewWireguardP2P(config Config) (*WireguardP2P, error) {
 
 	wg.pubsub, err = pubsub.NewGossipSub(wg.backgroundCtx, wg.host)
 	if err != nil {
-		wg.backgroundCancel()
 		wg.dht.Close()
 		wg.host.Close()
+		wg.backgroundCancel()
 		slog.Error("Failed to create PubSub", "error", err)
 		return nil, fmt.Errorf("failed to create PubSub: %w", err)
 	}
@@ -309,9 +312,9 @@ func NewWireguardP2P(config Config) (*WireguardP2P, error) {
 
 	wg.peersTopic, err = wg.pubsub.Join(PeerUpdateTopic)
 	if err != nil {
-		wg.backgroundCancel()
 		wg.dht.Close()
 		wg.host.Close()
+		wg.backgroundCancel()
 		slog.Error("Failed to join PubSub topic", "topic", PeerUpdateTopic, "error", err)
 		return nil, fmt.Errorf("failed to join PubSub topic %s: %w", PeerUpdateTopic, err)
 	}
@@ -319,10 +322,10 @@ func NewWireguardP2P(config Config) (*WireguardP2P, error) {
 
 	wg.peerSub, err = wg.peersTopic.Subscribe()
 	if err != nil {
-		wg.backgroundCancel()
 		wg.peersTopic.Close()
 		wg.dht.Close()
 		wg.host.Close()
+		wg.backgroundCancel()
 		slog.Error("Failed to subscribe to PubSub topic", "topic", PeerUpdateTopic, "error", err)
 		return nil, fmt.Errorf("failed to subscribe to PubSub topic %s: %w", PeerUpdateTopic, err)
 	}
@@ -338,14 +341,42 @@ func NewWireguardP2P(config Config) (*WireguardP2P, error) {
 
 	err = writeWireGuardInterface(wg.config.DataPath, wg.wgConfig)
 	if err != nil {
-		wg.backgroundCancel()
+		wg.peerSub.Cancel()
 		wg.peersTopic.Close()
 		wg.dht.Close()
 		wg.host.Close()
+		wg.backgroundCancel()
 		slog.Error("Failed to write WireGuard interface config", "error", err)
 		return nil, fmt.Errorf("failed to write WireGuard interface config: %w", err)
 	}
 	slog.Info("WireGuard interface config written", "interface", wg.config.WireguardInterface)
+
+	wg.upnp, err = NewUpnp()
+	if err != nil {
+		slog.Error("Failed to create UPnP instance", "error", err)
+	} else {
+		wg.upnpWireguardPortIdx, err = wg.upnp.AddPortMapping(uint16(wg.config.WireguardPort), uint16(wg.config.WireguardPort), "udp", "WireGuard")
+		if err != nil {
+			slog.Error("Failed to add UPnP port mapping", "error", err)
+			wg.upnp = nil // Disable UPnP if port mapping fails
+		}
+	}
+
+	if wg.upnp != nil {
+		go func() {
+			for {
+				err := wg.upnp.Run()
+				if err != nil {
+					if err == ErrUpnpClosed {
+						slog.Info("UPnP closed gracefully")
+						break
+					}
+
+					slog.Error("UPnP error", "error", err)
+				}
+			}
+		}()
+	}
 
 	slog.Info("WireGuard P2P instance created", "interface", wg.config.WireguardInterface, "peer_id", wg.host.ID(), "addresses", wg.host.Addrs())
 
@@ -401,6 +432,32 @@ func (wg *WireguardP2P) GetAddrs() []string {
 			fmt.Printf("Error creating public address: %v\n", err)
 		}
 		addrs = append(addrs, publicAddr.String())
+	}
+
+	if wg.upnp != nil {
+		externalAddrs, err := wg.upnp.GetExternalIPAddresses()
+		if err != nil {
+			slog.Error("Failed to get external IP addresses from UPnP", "error", err)
+		} else {
+			for _, externalAddr := range externalAddrs {
+				found := false
+				addrStr := fmt.Sprintf("/ip4/%s/tcp/%d", externalAddr, wg.config.Port)
+				for _, addr := range addrs {
+					if strings.HasPrefix(addr, addrStr) {
+						found = true
+					}
+				}
+
+				if !found {
+					externalMultiAddr, err := ma.NewMultiaddr(addrStr + "/p2p/" + wg.host.ID().String())
+					if err != nil {
+						slog.Error("Failed to create external multi-address", "error", err, "address", addrStr)
+					} else {
+						addrs = append(addrs, externalMultiAddr.String())
+					}
+				}
+			}
+		}
 	}
 
 	return addrs
@@ -563,28 +620,34 @@ func (wg *WireguardP2P) Start() error {
 }
 
 func (wg *WireguardP2P) Close() error {
-	wg.backgroundCancel()
+	wg.peerSub.Cancel()
 
 	if err := wg.peersTopic.Close(); err != nil {
 		slog.Error("Failed to close PubSub topic", "error", err)
 		return fmt.Errorf("failed to close PubSub topic: %w", err)
 	}
+	slog.Info("PubSub topic closed", "topic", PeerUpdateTopic)
 
 	if err := wg.dht.Close(); err != nil {
 		slog.Error("Failed to close DHT", "error", err)
 		return fmt.Errorf("failed to close DHT: %w", err)
 	}
+	slog.Info("DHT closed", "peer_id", wg.dht.Host().ID())
 
 	if err := wg.host.Close(); err != nil {
 		slog.Error("Failed to close host", "error", err)
 		return fmt.Errorf("failed to close host: %w", err)
 	}
+	slog.Info("Host closed", "peer_id", wg.host.ID())
+
+	wg.backgroundCancel()
 
 	err := uninstallWireguardInterface(wg.config.WireguardInterface)
 	if err != nil {
 		slog.Error("Failed to uninstall WireGuard interface", "error", err)
 		return fmt.Errorf("failed to uninstall wireguard interface: %v", err)
 	}
+	slog.Info("WireGuard interface uninstalled", "interface", wg.config.WireguardInterface)
 
 	err = deleteWireGuardInterface(wg.config.WireguardInterface, wg.config.DataPath)
 	if err != nil {
