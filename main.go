@@ -180,6 +180,7 @@ func main() {
 					}
 					cancel()
 
+					wg.GetHost().Peerstore().AddAddrs(connectAddrs.ID, connectAddrs.Addrs, time.Hour*24*31) // Store for 31 days
 					fmt.Printf("Connected to peer: %s\n", connectAddrs.ID)
 				case "peers":
 					peers := wg.GetHost().Network().Peers()
