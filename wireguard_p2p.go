@@ -564,9 +564,11 @@ func (wg *WireguardP2P) Start() error {
 
 func (wg *WireguardP2P) Close() error {
 	wg.backgroundCancel()
-	wg.peersTopic.Close()
-	wg.dht.Close()
-	wg.host.Close()
+
+	if err := wg.peersTopic.Close(); err != nil {
+		slog.Error("Failed to close PubSub topic", "error", err)
+		return fmt.Errorf("failed to close PubSub topic: %w", err)
+	}
 
 	if err := wg.dht.Close(); err != nil {
 		slog.Error("Failed to close DHT", "error", err)
