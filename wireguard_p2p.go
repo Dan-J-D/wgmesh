@@ -251,7 +251,7 @@ func NewWireguardP2P(config Config) (*WireguardP2P, error) {
 	}
 
 	wg.host, err = libp2p.New(
-		libp2p.UserAgent("libp2p-test/1.0.0"),
+		libp2p.UserAgent("wireguard-mesh/1.1.0"),
 		libp2p.Identity(wg.peerPrivateKey),
 		libp2p.EnableAutoNATv2(),
 		libp2p.EnableHolePunching(),
