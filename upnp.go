@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/huin/goupnp/dcps/internetgateway1"
 	"github.com/huin/goupnp/dcps/internetgateway2"
 	"golang.org/x/exp/slog"
 	"golang.org/x/sync/errgroup"
@@ -80,6 +81,18 @@ func NewUpnp() (*upnp, error) {
 		ppp1Clients, _, err = internetgateway2.NewWANPPPConnection1Clients()
 		return err
 	})
+	var ig2ip1Clients []*internetgateway1.WANIPConnection1
+	tasks.Go(func() error {
+		var err error
+		ig2ip1Clients, _, err = internetgateway1.NewWANIPConnection1Clients()
+		return err
+	})
+	var ig2ppp1Clients []*internetgateway1.WANPPPConnection1
+	tasks.Go(func() error {
+		var err error
+		ig2ppp1Clients, _, err = internetgateway1.NewWANPPPConnection1Clients()
+		return err
+	})
 
 	if err := tasks.Wait(); err != nil {
 		cancel()
@@ -88,8 +101,8 @@ func NewUpnp() (*upnp, error) {
 	}
 	cancel()
 
-	if len(ip1Clients) == 0 && len(ip2Clients) == 0 && len(ppp1Clients) == 0 {
-		slog.Warn("No UPnP clients found", "ip1Clients", len(ip1Clients), "ip2Clients", len(ip2Clients), "ppp1Clients", len(ppp1Clients))
+	if len(ip1Clients) == 0 && len(ip2Clients) == 0 && len(ppp1Clients) == 0 && len(ig2ip1Clients) == 0 && len(ig2ppp1Clients) == 0 {
+		slog.Warn("No UPnP clients found", "ip1Clients", len(ip1Clients), "ip2Clients", len(ip2Clients), "ppp1Clients", len(ppp1Clients), "ig2ip1Clients", len(ig2ip1Clients), "ig2ppp1Clients", len(ig2ppp1Clients))
 		return nil, errors.New("no UPnP clients found")
 	}
 
@@ -114,6 +127,18 @@ func NewUpnp() (*upnp, error) {
 	}
 
 	for _, client := range ppp1Clients {
+		if client != nil {
+			upnp.clients = append(upnp.clients, client)
+		}
+	}
+
+	for _, client := range ig2ip1Clients {
+		if client != nil {
+			upnp.clients = append(upnp.clients, client)
+		}
+	}
+
+	for _, client := range ig2ppp1Clients {
 		if client != nil {
 			upnp.clients = append(upnp.clients, client)
 		}
