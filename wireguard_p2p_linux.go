@@ -18,6 +18,7 @@ limitations under the License.
 package main
 
 import (
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -25,25 +26,36 @@ import (
 )
 
 func writeWireGuardInterface(_ string, config wireguardConfig) error {
+	slog.Debug("Writing WireGuard interface configuration", "interface", config.Interface)
 	return os.WriteFile(filepath.Join("/etc/wireguard", config.Interface+".conf"), []byte(config.String()), 0600)
 }
 
 func deleteWireGuardInterface(interfaceName, _ string) error {
+	slog.Debug("Deleting WireGuard interface configuration", "interface", interfaceName)
 	return os.Remove(filepath.Join("/etc/wireguard", interfaceName+".conf"))
 }
 
 func installWireguardInterface(interfaceName, _ string) error {
-	return exec.Command("wg-quick", "up", interfaceName).Run()
+	slog.Debug("Installing WireGuard interface", "interface", interfaceName)
+	cmd := exec.Command("wg-quick", "up", interfaceName)
+	cmd.Stdout = slogWriter{level: slog.LevelInfo}
+	cmd.Stderr = slogWriter{level: slog.LevelError}
+	return cmd.Run()
 }
 
 func uninstallWireguardInterface(interfaceName string) error {
-	return exec.Command("wg-quick", "down", interfaceName).Run()
+	slog.Debug("Uninstalling WireGuard interface", "interface", interfaceName)
+	cmd := exec.Command("wg-quick", "down", interfaceName)
+	cmd.Stdout = slogWriter{level: slog.LevelInfo}
+	cmd.Stderr = slogWriter{level: slog.LevelError}
+	return cmd.Run()
 }
 
 func syncWireguardInterface(interfaceName, _ string) error {
 	if err := uninstallWireguardInterface(interfaceName); err != nil {
 		return err
 	}
+
 	for i := 0; ; i++ {
 		err := installWireguardInterface(interfaceName, "")
 		if err == nil {
@@ -51,6 +63,7 @@ func syncWireguardInterface(interfaceName, _ string) error {
 		}
 		time.Sleep(500 * time.Millisecond)
 		if i >= 10 {
+			slog.Error("Failed to sync WireGuard interface after 10 attempts", "interface", interfaceName, "error", err)
 			return err
 		}
 	}

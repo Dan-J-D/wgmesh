@@ -19,6 +19,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
+	"log/slog"
 	"net"
 	"path"
 	"strconv"
@@ -33,7 +34,9 @@ import (
 	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/host"
+	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/core/peerstore"
 	"github.com/libp2p/go-libp2p/core/pnet"
 	"github.com/libp2p/go-libp2p/p2p/host/peerstore/pstoreds"
 	"github.com/libp2p/go-libp2p/p2p/muxer/yamux"
@@ -43,6 +46,18 @@ import (
 )
 
 const PeerUpdateTopic = "peers"
+
+type slogWriter struct {
+	level slog.Level
+}
+
+func (sw slogWriter) Write(p []byte) (n int, err error) {
+	msg := strings.TrimSpace(string(p))
+	if msg != "" {
+		slog.Log(context.Background(), sw.level, msg)
+	}
+	return len(p), nil
+}
 
 type wireguardPeerConfig struct {
 	PublicKey    string
@@ -76,6 +91,38 @@ func (wc *wireguardConfig) String() string {
 		str += "\n"
 	}
 	return str
+}
+
+type wireguardNetworkNotifiee struct {
+	wg *WireguardP2P
+}
+
+func (wgn *wireguardNetworkNotifiee) Listen(network network.Network, multiAddr ma.Multiaddr) {
+	slog.Info("Listen started", "multiaddr", multiAddr)
+}
+
+func (wgn *wireguardNetworkNotifiee) ListenClose(network network.Network, multiAddr ma.Multiaddr) {
+	slog.Info("Listen closed", "multiaddr", multiAddr)
+}
+
+func (wgn *wireguardNetworkNotifiee) Connected(net network.Network, con network.Conn) {
+	slog.Info("Connected to peer", "peer_id", con.RemotePeer(), "remote_addr", con.RemoteMultiaddr())
+
+	for _, addr := range wgn.wg.GetHost().Peerstore().PeersWithAddrs() {
+		if addr == wgn.wg.host.ID() {
+			continue // skip self
+		}
+
+		addrInfo := wgn.wg.host.Peerstore().PeerInfo(addr)
+		if len(addrInfo.Addrs) > 0 {
+			// make sure the peer is saved permanently
+			wgn.wg.host.Peerstore().AddAddrs(addr, addrInfo.Addrs, peerstore.PermanentAddrTTL)
+		}
+	}
+}
+
+func (wgn *wireguardNetworkNotifiee) Disconnected(network network.Network, con network.Conn) {
+	slog.Info("Disconnected from peer", "peer_id", con.RemotePeer())
 }
 
 type Config struct {
@@ -119,6 +166,7 @@ func validateConfig(cfg *Config) error {
 
 func NewWireguardP2P(config Config) (*WireguardP2P, error) {
 	if err := validateConfig(&config); err != nil {
+		slog.Error("Invalid configuration", "error", err)
 		return nil, fmt.Errorf("invalid configuration: %w", err)
 	}
 
@@ -127,6 +175,7 @@ func NewWireguardP2P(config Config) (*WireguardP2P, error) {
 
 	wg.publicIpAddress = net.ParseIP(config.PublicIp)
 	if wg.publicIpAddress == nil {
+		slog.Error("Invalid public IP address", "public_ip", config.PublicIp)
 		return nil, fmt.Errorf("invalid public IP address: %s", config.PublicIp)
 	}
 
@@ -134,12 +183,14 @@ func NewWireguardP2P(config Config) (*WireguardP2P, error) {
 	if len(config.WireguardPrivateKey) == 0 {
 		wg.wgPrivateKey, err = wgtypes.GeneratePrivateKey()
 		if err != nil {
+			slog.Error("Failed to generate WireGuard private key", "error", err)
 			return nil, fmt.Errorf("failed to generate private key: %w", err)
 		}
 		wg.config.WireguardPrivateKey = wg.wgPrivateKey.String() // already base64 encoded
 	} else {
 		wg.wgPrivateKey, err = wgtypes.ParseKey(string(config.WireguardPrivateKey))
 		if err != nil {
+			slog.Error("Failed to parse WireGuard private key", "error", err)
 			return nil, fmt.Errorf("failed to parse private key: %w", err)
 		}
 	}
@@ -147,21 +198,25 @@ func NewWireguardP2P(config Config) (*WireguardP2P, error) {
 	if len(config.PeerIdentityPrivateKey) == 0 {
 		wg.peerPrivateKey, _, err = crypto.GenerateKeyPair(crypto.Ed25519, 0)
 		if err != nil {
+			slog.Error("Failed to generate peer identity private key", "error", err)
 			return nil, fmt.Errorf("failed to generate peer identity private key: %w", err)
 		}
 		privKey, err := crypto.MarshalPrivateKey(wg.peerPrivateKey)
 		if err != nil {
+			slog.Error("Failed to marshal peer identity private key", "error", err)
 			return nil, fmt.Errorf("failed to marshal peer identity private key: %w", err)
 		}
 		wg.config.PeerIdentityPrivateKey = base64.StdEncoding.EncodeToString(privKey)
 	} else {
 		privKey, err := base64.StdEncoding.DecodeString(config.PeerIdentityPrivateKey)
 		if err != nil {
+			slog.Error("Failed to decode peer identity private key", "error", err)
 			return nil, fmt.Errorf("failed to decode peer identity private key: %w", err)
 		}
 
 		wg.peerPrivateKey, err = crypto.UnmarshalPrivateKey(privKey)
 		if err != nil {
+			slog.Error("Failed to unmarshal peer identity private key", "error", err)
 			return nil, fmt.Errorf("failed to unmarshal peer identity private key: %w", err)
 		}
 	}
@@ -172,6 +227,7 @@ func NewWireguardP2P(config Config) (*WireguardP2P, error) {
 	_, err = psk.Write([]byte(wg.config.PreSharedKey))
 	if err != nil {
 		wg.backgroundCancel()
+		slog.Error("Failed to write pre-shared key", "error", err)
 		return nil, fmt.Errorf("failed to write pre-shared key: %w", err)
 	}
 	psk.Write([]byte{0x5d, 0xa5, 0x86, 0xed, 0xc7, 0x30, 0x5a, 0xb7, 0x2c, 0x0d, 0x4c, 0x3d, 0xff, 0x67, 0x51, 0xe5}) // Random pre-shared salt (generated from `openssl rand -hex 16`)
@@ -179,6 +235,7 @@ func NewWireguardP2P(config Config) (*WireguardP2P, error) {
 	peerStoreDb, err := leveldb.NewDatastore(path.Join(wg.config.DataPath, "peerstore"), nil)
 	if err != nil {
 		wg.backgroundCancel()
+		slog.Error("Failed to create peerstore datastore", "error", err)
 		return nil, fmt.Errorf("failed to create peerstore datastore: %w", err)
 	}
 
@@ -186,6 +243,7 @@ func NewWireguardP2P(config Config) (*WireguardP2P, error) {
 	if err != nil {
 		wg.backgroundCancel()
 		peerStoreDb.Close()
+		slog.Error("Failed to create peerstore", "error", err)
 		return nil, fmt.Errorf("failed to create peerstore: %w", err)
 	}
 
@@ -203,15 +261,19 @@ func NewWireguardP2P(config Config) (*WireguardP2P, error) {
 	if err != nil {
 		wg.backgroundCancel()
 		peerStore.Close()
+		slog.Error("Failed to create libp2p host", "error", err)
 		return nil, fmt.Errorf("failed to create libp2p host: %w", err)
 	}
+	slog.Info("Libp2p host created", "peer_id", wg.host.ID(), "addresses", wg.host.Addrs())
+
+	wg.host.Network().Notify(&wireguardNetworkNotifiee{wg: wg})
 
 	psk.Write([]byte("wireguard_p2p"))
 	wg.wgPsk, err = wgtypes.NewKey(psk.Sum(nil))
 	if err != nil {
 		wg.backgroundCancel()
 		wg.host.Close()
-		peerStore.Close()
+		slog.Error("Failed to create WireGuard pre-shared key", "error", err)
 		return nil, fmt.Errorf("failed to create WireGuard pre-shared key: %w", err)
 	}
 
@@ -219,6 +281,7 @@ func NewWireguardP2P(config Config) (*WireguardP2P, error) {
 	if err != nil {
 		wg.backgroundCancel()
 		wg.host.Close()
+		slog.Error("Failed to create DHT datastore", "error", err)
 		return nil, fmt.Errorf("failed to create DHT datastore: %w", err)
 	}
 	wg.dht, err = dht.New(wg.backgroundCtx, wg.host,
@@ -229,24 +292,30 @@ func NewWireguardP2P(config Config) (*WireguardP2P, error) {
 		wg.backgroundCancel()
 		wg.host.Close()
 		dhtDataStore.Close()
+		slog.Error("Failed to create DHT", "error", err)
 		return nil, fmt.Errorf("failed to create DHT: %w", err)
 	}
+	slog.Info("DHT created", "peer_id", wg.dht.Host().ID(), "addresses", wg.dht.Host().Addrs())
 
 	wg.pubsub, err = pubsub.NewGossipSub(wg.backgroundCtx, wg.host)
 	if err != nil {
 		wg.backgroundCancel()
 		wg.dht.Close()
 		wg.host.Close()
+		slog.Error("Failed to create PubSub", "error", err)
 		return nil, fmt.Errorf("failed to create PubSub: %w", err)
 	}
+	slog.Info("PubSub created")
 
 	wg.peersTopic, err = wg.pubsub.Join(PeerUpdateTopic)
 	if err != nil {
 		wg.backgroundCancel()
 		wg.dht.Close()
 		wg.host.Close()
+		slog.Error("Failed to join PubSub topic", "topic", PeerUpdateTopic, "error", err)
 		return nil, fmt.Errorf("failed to join PubSub topic %s: %w", PeerUpdateTopic, err)
 	}
+	slog.Info("Joined PubSub topic", "topic", PeerUpdateTopic)
 
 	wg.peerSub, err = wg.peersTopic.Subscribe()
 	if err != nil {
@@ -254,8 +323,10 @@ func NewWireguardP2P(config Config) (*WireguardP2P, error) {
 		wg.peersTopic.Close()
 		wg.dht.Close()
 		wg.host.Close()
+		slog.Error("Failed to subscribe to PubSub topic", "topic", PeerUpdateTopic, "error", err)
 		return nil, fmt.Errorf("failed to subscribe to PubSub topic %s: %w", PeerUpdateTopic, err)
 	}
+	slog.Info("Subscribed to PubSub topic", "topic", PeerUpdateTopic)
 
 	wg.wgConfig = wireguardConfig{
 		Interface:  wg.config.WireguardInterface,
@@ -271,8 +342,12 @@ func NewWireguardP2P(config Config) (*WireguardP2P, error) {
 		wg.peersTopic.Close()
 		wg.dht.Close()
 		wg.host.Close()
+		slog.Error("Failed to write WireGuard interface config", "error", err)
 		return nil, fmt.Errorf("failed to write WireGuard interface config: %w", err)
 	}
+	slog.Info("WireGuard interface config written", "interface", wg.config.WireguardInterface)
+
+	slog.Info("WireGuard P2P instance created", "interface", wg.config.WireguardInterface, "peer_id", wg.host.ID(), "addresses", wg.host.Addrs())
 
 	return wg, nil
 }
@@ -334,16 +409,20 @@ func (wg *WireguardP2P) GetAddrs() []string {
 func (wg *WireguardP2P) Start() error {
 	err := installWireguardInterface(wg.config.WireguardInterface, wg.config.DataPath)
 	if err != nil {
+		slog.Error("Failed to install WireGuard interface", "error", err)
 		return fmt.Errorf("failed to install WireGuard interface: %w", err)
 	}
+	slog.Info("WireGuard interface installed", "interface", wg.config.WireguardInterface)
 
 	// Kad-DHT Bootstrap
 	go func() {
+		slog.Info("Bootstrapping DHT")
 		if err := wg.dht.Bootstrap(wg.backgroundCtx); err != nil {
 			if err == context.Canceled {
 				return // Context canceled, exit gracefully
 			}
 
+			slog.Error("Error bootstrapping DHT", "error", err)
 			fmt.Printf("Error bootstrapping DHT: %v\n", err)
 			return
 		}
@@ -358,11 +437,13 @@ func (wg *WireguardP2P) Start() error {
 					return
 				}
 
+				slog.Error("Error receiving message from PubSub", "error", err)
 				fmt.Printf("Error receiving message: %v\n", err)
 				continue
 			}
 
 			if msg == nil {
+				slog.Warn("Received nil message from PubSub, skipping")
 				fmt.Println("Received nil message, skipping")
 				continue
 			}
@@ -373,31 +454,31 @@ func (wg *WireguardP2P) Start() error {
 
 			wgPeerData := strings.Split(string(msg.Data), "@")
 			if len(wgPeerData) != 3 {
-				fmt.Printf("Invalid WireGuard peer data format: %s\n", string(msg.Data))
+				slog.Error("Invalid WireGuard peer data format", "data", string(msg.Data))
 				continue
 			}
 
 			udpAddr := strings.Split(wgPeerData[0], ":")
 			if len(udpAddr) != 2 {
-				fmt.Printf("Invalid WireGuard peer endpoint format: %s\n", wgPeerData[0])
+				slog.Error("Invalid WireGuard peer endpoint format", "endpoint", wgPeerData[0])
 				continue
 			}
 
 			peerEndpointIP := net.ParseIP(udpAddr[0])
 			if peerEndpointIP == nil {
-				fmt.Printf("Invalid IP address: %s\n", wgPeerData[0])
+				slog.Error("Invalid IP address in WireGuard peer endpoint", "ip", udpAddr[0])
 				continue
 			}
 
 			peerEndpointPort, err := strconv.Atoi(udpAddr[1])
 			if err != nil || peerEndpointPort <= 0 || peerEndpointPort > 65535 {
-				fmt.Printf("Invalid port number: %s\n", udpAddr[1])
+				slog.Error("Invalid port number in WireGuard peer endpoint", "port", udpAddr[1])
 				continue
 			}
 
 			peerInterfaceIp := net.ParseIP(wgPeerData[1])
 			if peerInterfaceIp == nil {
-				fmt.Printf("Invalid interface IP address: %s\n", wgPeerData[1])
+				slog.Error("Invalid interface IP address in WireGuard peer data", "interface_ip", wgPeerData[1])
 				continue
 			}
 
@@ -421,15 +502,17 @@ func (wg *WireguardP2P) Start() error {
 
 			err = writeWireGuardInterface(wg.config.DataPath, wg.wgConfig)
 			if err != nil {
-				fmt.Printf("Failed to write WireGuard interface config: %v\n", err)
+				slog.Error("Failed to write WireGuard interface config", "error", err)
 				continue
 			}
+			slog.Info("WireGuard interface config updated", "interface", wg.config.WireguardInterface, "peer_id", msg.GetFrom())
 
 			err = syncWireguardInterface(wg.config.WireguardInterface, wg.config.DataPath)
 			if err != nil {
-				fmt.Printf("Failed to sync WireGuard interface: %v\n", err)
+				slog.Error("Failed to sync WireGuard interface", "error", err)
 				continue
 			}
+			slog.Info("WireGuard interface synced", "interface", wg.config.WireguardInterface, "peer_id", msg.GetFrom())
 		}
 	}()
 
@@ -451,11 +534,11 @@ func (wg *WireguardP2P) Start() error {
 							return // Context canceled, exit gracefully
 						}
 
-						fmt.Printf("Error connecting to peer %s: %v\n", peer, err)
+						slog.Error("Error connecting to peer", "peer_id", peer, "error", err)
 						continue
 					}
 
-					fmt.Printf("Connected to peer: %s\n", peer)
+					slog.Info("Connected to peer", "peer_id", peer, "addresses", addrInfo.Addrs)
 					break
 				}
 			}
@@ -465,12 +548,16 @@ func (wg *WireguardP2P) Start() error {
 				if err == context.Canceled {
 					return // Context canceled, exit gracefully
 				}
+
+				slog.Error("Error publishing WireGuard peer data", "error", err)
 				continue
 			}
 
 			time.Sleep(1 * time.Minute)
 		}
 	}()
+
+	slog.Info("WireGuard P2P started", "interface", wg.config.WireguardInterface, "peer_id", wg.host.ID(), "addresses", wg.host.Addrs())
 
 	return nil
 }
@@ -482,22 +569,29 @@ func (wg *WireguardP2P) Close() error {
 	wg.host.Close()
 
 	if err := wg.dht.Close(); err != nil {
+		slog.Error("Failed to close DHT", "error", err)
 		return fmt.Errorf("failed to close DHT: %w", err)
 	}
 
 	if err := wg.host.Close(); err != nil {
+		slog.Error("Failed to close host", "error", err)
 		return fmt.Errorf("failed to close host: %w", err)
 	}
 
 	err := uninstallWireguardInterface(wg.config.WireguardInterface)
 	if err != nil {
+		slog.Error("Failed to uninstall WireGuard interface", "error", err)
 		return fmt.Errorf("failed to uninstall wireguard interface: %v", err)
 	}
 
 	err = deleteWireGuardInterface(wg.config.WireguardInterface, wg.config.DataPath)
 	if err != nil {
+		slog.Error("Failed to delete WireGuard config file", "error", err)
 		return fmt.Errorf("failed to delete wireguard config file: %v", err)
 	}
+	slog.Info("WireGuard interface deleted", "interface", wg.config.WireguardInterface)
+
+	slog.Info("WireGuard P2P closed", "interface", wg.config.WireguardInterface, "peer_id", wg.host.ID())
 
 	return nil
 }

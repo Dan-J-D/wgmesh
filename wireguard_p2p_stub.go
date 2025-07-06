@@ -19,24 +19,30 @@ package main
 
 import (
 	"errors"
+	"log/slog"
 )
 
 func writeWireGuardInterface(_ string, _ wireguardConfig) error {
+	slog.Error("WireGuard interface management is not supported on this platform")
 	return errors.New("WireGuard interface management is not supported on this platform")
 }
 
 func deleteWireGuardInterface(interfaceName, configPath string) error {
+	slog.Error("WireGuard interface management is not supported on this platform")
 	return errors.New("WireGuard interface management is not supported on this platform")
 }
 
 func installWireguardInterface(_, _ string) error {
+	slog.Error("WireGuard interface management is not supported on this platform")
 	return errors.New("WireGuard interface management is not supported on this platform")
 }
 
 func uninstallWireguardInterface(_ string) error {
+	slog.Error("WireGuard interface management is not supported on this platform")
 	return errors.New("WireGuard interface management is not supported on this platform")
 }
 
 func syncWireguardInterface(_, _ string) error {
+	slog.Error("WireGuard interface management is not supported on this platform")
 	return errors.New("WireGuard interface management is not supported on this platform")
 }

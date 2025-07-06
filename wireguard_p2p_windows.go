@@ -19,6 +19,7 @@ package main
 
 import (
 	"errors"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -27,23 +28,33 @@ import (
 )
 
 func writeWireGuardInterface(configPath string, config wireguardConfig) error {
+	slog.Debug("Writing WireGuard interface configuration", "interface", config.Interface, "configPath", configPath)
 	return os.WriteFile(filepath.Join(configPath, config.Interface+".conf"), []byte(config.String()), 0600)
 }
 
 func deleteWireGuardInterface(interfaceName, configPath string) error {
+	slog.Debug("Deleting WireGuard interface configuration", "interface", interfaceName, "configPath", configPath)
 	return os.Remove(filepath.Join(configPath, interfaceName+".conf"))
 }
 
 func installWireguardInterface(interfaceName, configPath string) error {
+	slog.Debug("Installing WireGuard interface", "interface", interfaceName, "configPath", configPath)
 	if strings.HasSuffix(configPath, ".conf") {
 		return errors.New("Config file must be a .conf file")
 	}
 
-	return exec.Command("wireguard", "/installtunnelservice", filepath.Join(configPath, interfaceName+".conf")).Run()
+	cmd := exec.Command("wireguard", "/installtunnelservice", filepath.Join(configPath, interfaceName+".conf"))
+	cmd.Stdout = slogWriter{level: slog.LevelInfo}
+	cmd.Stderr = slogWriter{level: slog.LevelError}
+	return cmd.Run()
 }
 
 func uninstallWireguardInterface(interfaceName string) error {
-	return exec.Command("wireguard", "/uninstalltunnelservice", interfaceName).Run()
+	slog.Debug("Uninstalling WireGuard interface", "interface", interfaceName)
+	cmd := exec.Command("wireguard", "/uninstalltunnelservice", interfaceName)
+	cmd.Stdout = slogWriter{level: slog.LevelInfo}
+	cmd.Stderr = slogWriter{level: slog.LevelError}
+	return cmd.Run()
 }
 
 func syncWireguardInterface(interfaceName, configPath string) error {
@@ -58,6 +69,7 @@ func syncWireguardInterface(interfaceName, configPath string) error {
 		}
 		time.Sleep(500 * time.Millisecond)
 		if i >= 10 {
+			slog.Error("Failed to install WireGuard interface after multiple attempts", "interface", interfaceName, "error", err)
 			return err
 		}
 	}
