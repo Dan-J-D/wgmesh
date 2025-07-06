@@ -231,7 +231,7 @@ func main() {
 				case "connect-string":
 					connectStr, err := json.Marshal(wg.GetAddrs())
 					if err != nil {
-						fmt.Println("Failed to marshal connect string: %v", err)
+						fmt.Printf("Failed to marshal connect string: %v\n", err)
 						continue
 					}
 					fmt.Println("Connect Addrs: ", string(connectStr))
