@@ -107,7 +107,7 @@ func NewUpnp() (*upnp, error) {
 	}
 
 	upnp := new(upnp)
-	upnp.clients = make([]routerClient, 0, len(ip1Clients)+len(ip2Clients)+len(ppp1Clients))
+	upnp.clients = make([]routerClient, 0, len(ip1Clients)+len(ip2Clients)+len(ppp1Clients)+len(ig2ip1Clients)+len(ig2ppp1Clients)
 	upnp.portMapIdx = atomic.Uint32{}
 	upnp.portMapIdx.Add(1) // Start from 1 to avoid confusion with zero index
 	upnp.portsMapped = make(map[uint32]upnpPortMapping, 0)
