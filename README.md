@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://github.com/Dan-J-D/wgmesh/blob/main/assets/logo.png?raw=true" alt="Centered Image" width="420"/>
+</p>
+
 # 🔗 wgmesh
 > Secure, peer-to-peer, decentralized mesh networking using WireGuard and libp2p.
 
