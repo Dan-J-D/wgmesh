@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://github.com/Dan-J-D/wgmesh/blob/main/assets/logo.png?raw=true" alt="Centered Image" width="360"/>
+  <img src="https://github.com/Dan-J-D/wgmesh/blob/main/assets/banner.png?raw=true" alt="Centered Image" width="360"/>
 </p>
 
 # 🔗 wgmesh
