@@ -2,7 +2,7 @@
 > Secure, peer-to-peer, decentralized mesh networking using WireGuard and libp2p.
 
 <p align="center">
-  <img src="https://github.com/Dan-J-D/wgmesh/blob/main/assets/banner.png?raw=true" alt="Centered Image" width="360"/>
+  <img src="https://github.com/Dan-J-D/wgmesh/blob/main/assets/banner.png?raw=true" alt="Centered Image" width="420"/>
 </p>
 
 ## ✨ Overview
