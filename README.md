@@ -1,9 +1,9 @@
+# 🔗 wgmesh
+> Secure, peer-to-peer, decentralized mesh networking using WireGuard and libp2p.
+
 <p align="center">
   <img src="https://github.com/Dan-J-D/wgmesh/blob/main/assets/banner.png?raw=true" alt="Centered Image" width="360"/>
 </p>
-
-# 🔗 wgmesh
-> Secure, peer-to-peer, decentralized mesh networking using WireGuard and libp2p.
 
 ## ✨ Overview
 **wgmesh** is a lightweight tool that transforms a collection of nodes into a **distributed, encrypted, and decentralized mesh network.** It combines [WireGuard](https://www.wireguard.com/)'s fast, secure VPN tunneling with [libp2p](https://libp2p.io/)'s powerful peer-to-peer networking to form a resilient overlay mesh -- no central server required.
