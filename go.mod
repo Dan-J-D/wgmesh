@@ -2,8 +2,6 @@ module github.com/dan-j-d/wgmesh
 
 go 1.23.8
 
-toolchain go1.23.10
-
 require (
 	github.com/go-playground/validator/v10 v10.27.0
 	github.com/huin/goupnp v1.3.0
