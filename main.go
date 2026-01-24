@@ -125,9 +125,6 @@ func main() {
 			fileHandler := slog.NewJSONHandler(file, &slog.HandlerOptions{
 				Level: lvl,
 			})
-			if err != nil {
-				panic(fmt.Sprintf("Failed to create file logger: %v", err))
-			}
 			handlers = append(handlers, fileHandler)
 		}
 
