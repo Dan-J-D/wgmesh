@@ -372,7 +372,7 @@ func NewWireguardP2P(config Config) (*WireguardP2P, error) {
 						break
 					}
 
-					slog.Error("UPnP error", "error", err)
+					slog.Error("Failed to handle UPnP error", "error", err)
 				}
 			}
 		}()
@@ -429,7 +429,7 @@ func (wg *WireguardP2P) GetAddrs() []string {
 	if !hasPublicIp {
 		publicAddr, err := ma.NewMultiaddr(publicIp + "/p2p/" + wg.host.ID().String())
 		if err != nil {
-			fmt.Printf("Error creating public address: %v\n", err)
+			slog.Error("Failed to create public address", "error", err)
 		}
 		addrs = append(addrs, publicAddr.String())
 	}
@@ -479,8 +479,7 @@ func (wg *WireguardP2P) Start() error {
 				return // Context canceled, exit gracefully
 			}
 
-			slog.Error("Error bootstrapping DHT", "error", err)
-			fmt.Printf("Error bootstrapping DHT: %v\n", err)
+			slog.Error("Failed to bootstrap DHT", "error", err)
 			return
 		}
 	}()
@@ -494,14 +493,12 @@ func (wg *WireguardP2P) Start() error {
 					return
 				}
 
-				slog.Error("Error receiving message from PubSub", "error", err)
-				fmt.Printf("Error receiving message: %v\n", err)
+				slog.Error("Failed to receive message from PubSub", "error", err)
 				continue
 			}
 
 			if msg == nil {
 				slog.Warn("Received nil message from PubSub, skipping")
-				fmt.Println("Received nil message, skipping")
 				continue
 			}
 
@@ -591,7 +588,7 @@ func (wg *WireguardP2P) Start() error {
 							return // Context canceled, exit gracefully
 						}
 
-						slog.Error("Error connecting to peer", "peer_id", peer, "error", err)
+						slog.Error("Failed to connect to peer", "peer_id", peer, "error", err)
 						continue
 					}
 
@@ -606,7 +603,7 @@ func (wg *WireguardP2P) Start() error {
 					return // Context canceled, exit gracefully
 				}
 
-				slog.Error("Error publishing WireGuard peer data", "error", err)
+				slog.Error("Failed to publish WireGuard peer data", "error", err)
 				continue
 			}
 

@@ -111,6 +111,7 @@ func main() {
 		case "error":
 			lvl = slog.LevelError
 		default:
+			slog.Error("Invalid log level", "level", *logLevel)
 			panic(fmt.Sprintf("Invalid log level: %s", *logLevel))
 		}
 
@@ -118,6 +119,7 @@ func main() {
 		if *logFile != "" {
 			file, err := os.OpenFile(*logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 			if err != nil {
+				slog.Error("Failed to open log file", "file", *logFile, "error", err)
 				panic(fmt.Sprintf("Failed to open log file %s: %v", *logFile, err))
 			}
 			defer file.Close()
@@ -156,6 +158,7 @@ func main() {
 		data, err := os.ReadFile(filepath.Join(dataPathAbs, "config.yaml"))
 		if err != nil {
 			slog.Error("Failed to read config file", "file", filepath.Join(dataPathAbs, "config.yaml"), "error", err)
+			slog.Error("Failed to read config file", "error", err)
 			panic(fmt.Sprintf("Failed to read config file: %v", err))
 		}
 
@@ -220,7 +223,7 @@ func main() {
 			if len(input) > 1 && input[0] == '/' {
 				inputSplit := strings.Split(input[1:], " ")
 				if len(inputSplit) == 0 {
-					fmt.Println("Invalid command, please try again.")
+					slog.Warn("Invalid command received", "command", input)
 					continue
 				}
 
@@ -228,7 +231,7 @@ func main() {
 				case "connect-string":
 					connectStr, err := json.Marshal(wg.GetAddrs())
 					if err != nil {
-						fmt.Printf("Failed to marshal connect string: %v\n", err)
+						slog.Error("Failed to marshal connect string", "error", err)
 						continue
 					}
 					fmt.Println("Connect Addrs:", string(connectStr))
@@ -242,7 +245,7 @@ func main() {
 					addrs := []string{}
 					err := json.Unmarshal([]byte(connectStr), &addrs)
 					if err != nil {
-						fmt.Printf("Invalid connect string: %v\n", err)
+						slog.Error("Invalid connect string", "error", err)
 						continue
 					}
 
@@ -254,7 +257,7 @@ func main() {
 					for _, addrStr := range addrs {
 						addr, err := ma.NewMultiaddr(addrStr)
 						if err != nil {
-							fmt.Printf("Invalid multi-address: %v\n", err)
+							slog.Error("Invalid multi-address", "error", err)
 							continue
 						}
 
@@ -263,7 +266,7 @@ func main() {
 							if connectAddrs.ID == "" {
 								connectAddrs.ID = id
 							} else if connectAddrs.ID != id {
-								fmt.Printf("Peer ID mismatch: expected %s, got %s\n", connectAddrs.ID, id)
+								slog.Warn("Mismatched peer IDs in connect addresses", "expected", connectAddrs.ID, "got", id)
 								continue
 							}
 
@@ -274,28 +277,28 @@ func main() {
 					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 					if err := wg.GetHost().Connect(ctx, connectAddrs); err != nil {
 						cancel()
-						fmt.Printf("Error connecting to peer: %v\n", err)
+						slog.Error("Failed to connect to peer", "peer_id", connectAddrs.ID, "error", err)
 						continue
 					}
 					cancel()
 
 					wg.GetHost().Peerstore().AddAddrs(connectAddrs.ID, connectAddrs.Addrs, peerstore.PermanentAddrTTL)
-					slog.Info("Connected to peer", "peerID", connectAddrs.ID, "addrs", connectAddrs.Addrs)
+					slog.Info("Connected to peer", "peer_id", connectAddrs.ID, "addresses", connectAddrs.Addrs)
 				case "peers":
 					peers := wg.GetHost().Network().Peers()
 					if len(peers) == 0 {
-						fmt.Println("No connected peers.")
+						slog.Info("No connected peers")
 					} else {
-						fmt.Println("Connected peers:")
+						slog.Info("Connected peers:")
 						for _, p := range peers {
-							fmt.Printf("- %s\n", p)
+							slog.Info("Connected peer", "peer_id", p)
 						}
 					}
 				case "exit":
 					slog.Info("Exiting...")
 					return
 				default:
-					fmt.Printf("Unknown command: `%s`\n", inputSplit[0])
+					slog.Warn("Unknown command", "command", inputSplit[0])
 				}
 
 				continue
@@ -303,7 +306,7 @@ func main() {
 		}
 
 		if err := scanner.Err(); err != nil {
-			slog.Error("Error reading input", "error", err)
+			slog.Error("Failed to read input", "error", err)
 		}
 	}
 }

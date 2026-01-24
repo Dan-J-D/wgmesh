@@ -58,6 +58,7 @@ func uninstallWireguardInterface(interfaceName string) error {
 }
 
 func syncWireguardInterface(interfaceName, configPath string) error {
+	slog.Debug("Syncing WireGuard interface configuration", "interface", interfaceName, "configPath", configPath)
 	if err := uninstallWireguardInterface(interfaceName); err != nil {
 		return err
 	}
