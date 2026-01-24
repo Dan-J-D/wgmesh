@@ -22,7 +22,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"time"
 )
 
 func writeWireGuardInterface(_ string, config wireguardConfig) error {
@@ -52,19 +51,9 @@ func uninstallWireguardInterface(interfaceName string) error {
 }
 
 func syncWireguardInterface(interfaceName, _ string) error {
-	if err := uninstallWireguardInterface(interfaceName); err != nil {
-		return err
-	}
-
-	for i := 0; ; i++ {
-		err := installWireguardInterface(interfaceName, "")
-		if err == nil {
-			return nil
-		}
-		time.Sleep(500 * time.Millisecond)
-		if i >= 10 {
-			slog.Error("Failed to sync WireGuard interface after 10 attempts", "interface", interfaceName, "error", err)
-			return err
-		}
-	}
+	slog.Debug("Syncing WireGuard interface configuration", "interface", interfaceName)
+	cmd := exec.Command("wg", "syncconf", interfaceName, filepath.Join("/etc/wireguard", interfaceName+".conf"))
+	cmd.Stdout = slogWriter{level: slog.LevelInfo}
+	cmd.Stderr = slogWriter{level: slog.LevelError}
+	return cmd.Run()
 }
