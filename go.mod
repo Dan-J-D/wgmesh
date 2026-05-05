@@ -1,6 +1,6 @@
 module github.com/dan-j-d/wgmesh
 
-go 1.23.8
+go 1.24
 
 require (
 	github.com/go-playground/validator/v10 v10.27.0
@@ -9,7 +9,7 @@ require (
 	github.com/ipfs/go-log/v2 v2.6.0
 	github.com/libp2p/go-libp2p v0.42.0
 	github.com/libp2p/go-libp2p-kad-dht v0.33.1
-	github.com/libp2p/go-libp2p-pubsub v0.14.2
+	github.com/libp2p/go-libp2p-pubsub v0.16.0
 	github.com/multiformats/go-multiaddr v0.16.0
 	golang.org/x/exp v0.0.0-20250606033433-dcc06ee1d476
 	golang.org/x/sync v0.16.0
